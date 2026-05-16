@@ -1,5 +1,6 @@
 //! Supertonic 3 model: 4 ONNX sessions + voice style + end-to-end forward.
 
+pub mod candle;
 pub mod config;
 pub mod voice;
 

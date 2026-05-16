@@ -41,7 +41,10 @@ from safetensors.numpy import save_file
 # module-exit points: LayerNorm closes a ConvNeXt block, Conv is the
 # heart of the dwconv, MatMul+Add is a Linear projection, Softmax is
 # the attention score peak.
-COARSE_INTERESTING_OPS = {"LayerNormalization", "Conv", "MatMul", "Softmax", "Gemm"}
+COARSE_INTERESTING_OPS = {
+    "LayerNormalization", "BatchNormalization", "Conv", "MatMul",
+    "Softmax", "Gemm", "Add", "PRelu",
+}
 # "Full" detail adds Mul/Add/Sub/Erf/Tanh outputs too. Excluded by default
 # because the count explodes (thousands per vector_estimator) and most
 # such outputs aren't useful for diagnosing a layer-level bug.
