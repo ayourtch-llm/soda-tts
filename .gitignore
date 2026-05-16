@@ -2,3 +2,5 @@
 /models
 *.wav
 *.mp3
+/tmp/golden.safetensors
+/tmp/roundtrip/
