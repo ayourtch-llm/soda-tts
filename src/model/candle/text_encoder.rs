@@ -159,12 +159,12 @@ impl AttnLayer {
         let v = split(&v)?;
 
         let inv_sqrt_d = (HEAD_DIM_ATTN as f64).sqrt().recip();
-        let q_scaled = (q.clone() * inv_sqrt_d)?;
+        let q_scaled = (q.clone() * inv_sqrt_d)?.contiguous()?;
         let kt = k.transpose(D::Minus2, D::Minus1)?.contiguous()?;
         let scores = q_scaled.matmul(&kt)?;
         hooks.record(&format!("attn_layers.{idx}/MatMul_output_0"), &scores)?;
 
-        let ext_k = get_relative_embeddings(&self.emb_rel_k, t)?;
+        let ext_k = get_relative_embeddings(&self.emb_rel_k, t)?.contiguous()?;
         let ext_kt = ext_k.transpose(D::Minus2, D::Minus1)?.contiguous()?;
         let rel_logits = q_scaled.broadcast_matmul(&ext_kt)?;
         hooks.record(&format!("attn_layers.{idx}/MatMul_1_output_0"), &rel_logits)?;
@@ -180,8 +180,8 @@ impl AttnLayer {
 
         let out_av = attn.matmul(&v)?;
         hooks.record(&format!("attn_layers.{idx}/MatMul_2_output_0"), &out_av)?;
-        let rel_w = absolute_position_to_relative_position(&attn)?;
-        let ext_v = get_relative_embeddings(&self.emb_rel_v, t)?;
+        let rel_w = absolute_position_to_relative_position(&attn)?.contiguous()?;
+        let ext_v = get_relative_embeddings(&self.emb_rel_v, t)?.contiguous()?;
         let out_rv = rel_w.broadcast_matmul(&ext_v)?;
         hooks.record(&format!("attn_layers.{idx}/MatMul_3_output_0"), &out_rv)?;
         let out = (out_av + out_rv)?;

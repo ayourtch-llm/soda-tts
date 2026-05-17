@@ -23,6 +23,7 @@ struct Args {
     seed: Option<u64>,
     silence_ms: u32,
     verbose: bool,
+    device: String, // "cpu" | "metal" | "auto"
 }
 
 impl Args {
@@ -35,6 +36,7 @@ impl Args {
             lang: "en".to_string(),
             speed: 1.05, steps: 8, seed: None,
             silence_ms: 300, verbose: false,
+            device: "auto".into(),
         };
         let mut it = std::env::args().skip(1);
         while let Some(arg) = it.next() {
@@ -50,13 +52,15 @@ impl Args {
                 "--seed" => a.seed = Some(it.next().context("--seed")?.parse()?),
                 "--silence-ms" => a.silence_ms = it.next().context("--silence-ms")?.parse()?,
                 "--verbose" => a.verbose = true,
+                "--device" => a.device = it.next().context("--device")?,
                 "-h" | "--help" => {
                     println!(
                         "usage: speak_candle --text \"...\" [--lang en] [--voice PATH] \\\n\
                          \t[--model-dir DIR] [--out FILE] [--speed F] [--steps N] [--seed N] \\\n\
-                         \t[--silence-ms N] [--verbose]\n\
+                         \t[--silence-ms N] [--device cpu|metal|auto] [--verbose]\n\
                          model-dir expects subdirs onnx/ (config + tokenizer), safetensors/\n\
-                         (model weights), and voice_styles/."
+                         (model weights), and voice_styles/. --device metal needs\n\
+                         `cargo build --features metal`."
                     );
                     std::process::exit(0);
                 }
@@ -78,8 +82,9 @@ fn main() -> Result<()> {
         (None, None) => bail!("supply --text or --infile"),
     };
 
-    let device = Device::Cpu;
+    let device = resolve_device(&args.device)?;
     if args.verbose {
+        eprintln!("device: {device:?}");
         eprintln!("loading candle Supertonic from {}", args.model_dir.display());
     }
     let t_load = std::time::Instant::now();
@@ -136,4 +141,35 @@ fn main() -> Result<()> {
     write_wav(&out, &args.out, sample_rate)?;
     eprintln!("wrote {}", args.out.display());
     Ok(())
+}
+
+fn resolve_device(spec: &str) -> Result<Device> {
+    match spec {
+        "cpu" => Ok(Device::Cpu),
+        "metal" => {
+            #[cfg(feature = "metal")]
+            {
+                Device::new_metal(0).map_err(|e| anyhow::anyhow!("Metal device: {e}"))
+            }
+            #[cfg(not(feature = "metal"))]
+            {
+                bail!("--device metal requires `cargo build --features metal`")
+            }
+        }
+        "auto" => {
+            #[cfg(feature = "metal")]
+            {
+                match Device::new_metal(0) {
+                    Ok(d) => Ok(d),
+                    Err(e) => {
+                        eprintln!("(Metal unavailable, falling back to CPU: {e})");
+                        Ok(Device::Cpu)
+                    }
+                }
+            }
+            #[cfg(not(feature = "metal"))]
+            { Ok(Device::Cpu) }
+        }
+        other => bail!("unknown device {other:?}; expected cpu|metal|auto"),
+    }
 }

@@ -5,6 +5,13 @@ edition = "2021"
 
 [features]
 default = []
+# Enables an Apple Metal code path for the candle backend. Note: as
+# measured on an M-series CPU, Metal is currently *slower* than CPU
+# for this model (1.8x slower on a 5.6s utterance). The model has
+# many small ops and small batches so per-op GPU dispatch overhead
+# dominates. The feature exists for experimentation; CPU is the
+# recommended candle device for now.
+metal = ["candle-core/metal", "candle-nn/metal"]
 
 [dependencies]
 # ONNX Runtime via the official Rust wrapper. By default `ort` downloads

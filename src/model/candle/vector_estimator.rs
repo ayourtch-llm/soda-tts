@@ -360,6 +360,7 @@ impl TextCondLayer {
         // insensitive to this scale (constant K -> uniform attention), so the
         // bug only shows up on the cond path.
         let scale = (TEXT_DIM as f64).sqrt().recip();
+        let q_rot = q_rot.contiguous()?;
         let kt = k_rot.transpose(D::Minus2, D::Minus1)?.contiguous()?;
         let scores = q_rot.matmul(&kt)?;
         let scores = (scores * scale)?;

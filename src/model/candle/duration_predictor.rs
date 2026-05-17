@@ -180,7 +180,7 @@ impl AttnLayer {
 
         let inv_sqrt_d = (HEAD_DIM as f64).sqrt().recip();
         // scores = (Q / sqrt(d)) @ K^T  ->  [B, H, T, T]
-        let q_scaled = (q.clone() * inv_sqrt_d)?;
+        let q_scaled = (q.clone() * inv_sqrt_d)?.contiguous()?;
         let kt = k.transpose(D::Minus2, D::Minus1)?.contiguous()?;
         let scores = q_scaled.matmul(&kt)?;
         hooks.record(&format!("attn_layers.{idx}/MatMul_output_0"), &scores)?;
@@ -190,7 +190,7 @@ impl AttnLayer {
         //   the window doesn't reach), then matmul Q_scaled @ ext^T to get
         //   [B, H, T, 2T-1] of relative scores. Then a pad-+-reshape "shift"
         //   turns that into [B, H, T, T] aligned with `scores`.
-        let ext_k = get_relative_embeddings(&self.emb_rel_k, t)?;
+        let ext_k = get_relative_embeddings(&self.emb_rel_k, t)?.contiguous()?;
         let ext_kt = ext_k.transpose(D::Minus2, D::Minus1)?.contiguous()?;
         let rel_logits = q_scaled.broadcast_matmul(&ext_kt)?;
         hooks.record(&format!("attn_layers.{idx}/MatMul_1_output_0"), &rel_logits)?;
@@ -214,8 +214,8 @@ impl AttnLayer {
 
         // V-side relative positions: shift attn from absolute to relative,
         // then matmul with extended emb_rel_v.
-        let rel_weights = absolute_position_to_relative_position(&attn)?;
-        let ext_v = get_relative_embeddings(&self.emb_rel_v, t)?;
+        let rel_weights = absolute_position_to_relative_position(&attn)?.contiguous()?;
+        let ext_v = get_relative_embeddings(&self.emb_rel_v, t)?.contiguous()?;
         let out_rv = rel_weights.broadcast_matmul(&ext_v)?;
         hooks.record(&format!("attn_layers.{idx}/MatMul_3_output_0"), &out_rv)?;
         let out = (out_av + out_rv)?;
