@@ -82,6 +82,15 @@ def load_voice(voice_path: Path) -> tuple[np.ndarray, np.ndarray]:
     return parse(data["style_ttl"]), parse(data["style_dp"])
 
 
+FORCE_EXPOSE = {
+    # vector_estimator.onnx: expose the raw vector-field output pre-ODE
+    "vector_estimator.onnx": [
+        "/vector_estimator/vector_field/proj_out/Mul_output_0",
+        "/vector_estimator/vector_field/proj_in/Mul_output_0",
+    ],
+}
+
+
 def add_intermediate_outputs(onnx_path: Path, detail: str) -> Path:
     """Rewrite an ONNX file to expose interesting node outputs as graph
     outputs. Returns a path to the rewritten file. We run shape
@@ -105,6 +114,16 @@ def add_intermediate_outputs(onnx_path: Path, detail: str) -> Path:
     existing_outputs = {o.name for o in model.graph.output}
     added = 0
     skipped_no_info = 0
+    # Always expose force-listed outputs (e.g. proj_out for vector_estimator).
+    for forced in FORCE_EXPOSE.get(onnx_path.name, []):
+        if forced in existing_outputs: continue
+        vi = value_info_by_name.get(forced)
+        if vi is None:
+            print(f"  WARN: forced output {forced!r} has no value_info", file=sys.stderr)
+            continue
+        model.graph.output.append(vi)
+        existing_outputs.add(forced)
+        added += 1
     for node in model.graph.node:
         if node.op_type not in interesting:
             continue
@@ -274,13 +293,16 @@ def main():
 
     # --- 5. Vector estimator: dump per-step outputs. ---
     print("\n=== vector_estimator ===")
+    # Force-expose proj_out/Mul (the raw vector-field output, pre-ODE) and
+    # a few other diagnostic intermediates so the candle port can bisect.
+    EXTRA_VE_OUTPUTS = [
+        "/vector_estimator/vector_field/proj_out/Mul_output_0",
+        "/vector_estimator/vector_field/proj_in/Mul_output_0",
+    ]
     xt = noisy_latent.copy()
     total_step = np.array([args.steps], dtype=np.float32)
     for step in range(args.steps):
         cur = np.array([step], dtype=np.float32)
-        # Only dump intermediates for step 0 and the last step --
-        # repeating per step would multiply the dump size by ~steps×
-        # without helping a layer-level diff (which targets one step).
         detail_for_step = args.detail if step in (0, args.steps - 1) else "minimal"
         out = run_model(
             f"vector_estimator/step_{step:02d}",
