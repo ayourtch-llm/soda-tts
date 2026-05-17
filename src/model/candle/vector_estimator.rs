@@ -129,45 +129,51 @@ impl ConvNextBlock {
 // sinusoidal(t) -> Linear(64,256) -> Mish -> Linear(256,64) -> [B, 64, 1]
 
 struct TimeEncoder {
-    inv_freq: Tensor, // [1, 32]  precomputed 1/base^(2i/dim)
+    /// pre-scale factor for `t` -- loaded from
+    /// `time_encoder/sinusoidal/Constant_2_output_0` (= 1000.0).
+    t_scale: f32,
+    /// inverse-frequency table loaded from
+    /// `time_encoder/sinusoidal/Constant_3_output_0` shape [1, 32].
+    /// Geometric with ratio ~0.7430 (NOT 1/10000^(2i/64) like canonical RoPE).
+    inv_freq: Tensor,
     mlp0: candle_nn::Linear, // 64 -> 256
     mlp2: candle_nn::Linear, // 256 -> 64
 }
 
 impl TimeEncoder {
-    fn load(vb: VarBuilder, device: &Device) -> Result<Self> {
-        // Build inv_freq table. ONNX has a precomputed Constant_3_output_0
-        // [1, 32] which we mirror here: inv_freq[i] = 1 / 1000^(2i/32).
-        // (Note: the Constant_2_output_0 scalar is 1000.0, NOT 10000 --
-        // see tts.json's `rotary_base` for the cross-attn vs the time
-        // encoder's own embedding base.)
-        let dim = TIME_DIM / 2;
-        let base: f32 = 1000.0;
-        let inv: Vec<f32> = (0..dim)
-            .map(|i| 1.0f32 / base.powf((2 * i) as f32 / TIME_DIM as f32))
-            .collect();
-        let inv_freq = Tensor::from_vec(inv, (1, dim), device)?;
-        // MLP weights are Linear (Gemm) so candle's standard linear loader works.
+    fn load(vb: VarBuilder, root_vb: &VarBuilder) -> Result<Self> {
+        // Both constants are stored at the root (no `tts.*` prefix) because
+        // ONNX named them as graph-internal `/...Constant_*_output_0` paths.
+        let t_scale_t = root_vb.get(
+            (), "/vector_estimator/vector_field/time_encoder/sinusoidal/Constant_2_output_0",
+        ).context("time_encoder Constant_2 (t_scale)")?;
+        let t_scale = t_scale_t.to_dtype(DType::F32)?.to_scalar::<f32>()?;
+        let inv_freq = root_vb.get(
+            (1, TIME_DIM / 2),
+            "/vector_estimator/vector_field/time_encoder/sinusoidal/Constant_3_output_0",
+        ).context("time_encoder Constant_3 (inv_freq)")?;
+
         let mlp0 = candle_nn::linear(TIME_DIM, TIME_HDIM, vb.pp("mlp.0.linear"))
             .context("time mlp.0")?;
         let mlp2 = candle_nn::linear(TIME_HDIM, TIME_DIM, vb.pp("mlp.2.linear"))
             .context("time mlp.2")?;
-        Ok(Self { inv_freq, mlp0, mlp2 })
+        Ok(Self { t_scale, inv_freq, mlp0, mlp2 })
     }
 
     /// `t`: [B] f32 (= current_step / total_step). Returns [B, 64, 1].
     fn forward(&self, t: &Tensor) -> candle_core::Result<Tensor> {
         let b = t.dim(0)?;
-        // sin/cos sinusoidal embedding: [B, 1] * [1, 32] -> [B, 32]
-        let t_col = t.reshape((b, 1))?;
+        // ONNX: phase = (t * 1000) * inv_freq. Without the 1000x prescale
+        // the sinusoidal embedding for t=1/8 happens to be visually
+        // similar to the right answer but accumulates error per step.
+        let t_col = t.reshape((b, 1))?.affine(self.t_scale as f64, 0.0)?;
         let phase = t_col.broadcast_mul(&self.inv_freq)?;
         let sin = phase.sin()?;
         let cos = phase.cos()?;
         let emb = Tensor::cat(&[sin, cos], D::Minus1)?; // [B, 64]
-        // MLP: linear -> Mish -> linear.
-        let h = self.mlp0.forward(&emb)?; // [B, 256]
+        let h = self.mlp0.forward(&emb)?;
         let h = mish(&h)?;
-        let h = self.mlp2.forward(&h)?; // [B, 64]
+        let h = self.mlp2.forward(&h)?;
         h.reshape((b, TIME_DIM, 1))
     }
 }
@@ -642,7 +648,8 @@ impl CandleVectorEstimator {
             Conv1d::new(w, None, Conv1dConfig { padding: 0, stride: 1, dilation: 1, groups: 1,
                 ..Default::default() })
         };
-        let time_encoder = TimeEncoder::load(vf.pp("time_encoder"), device)?;
+        let time_encoder = TimeEncoder::load(vf.pp("time_encoder"), &root_vb)?;
+        let _ = device; // not needed for this loader anymore
 
         // The 36 hidden `onnx::MatMul_*` weights follow a clean per-block
         // pattern empirically derived in tools (see git log):

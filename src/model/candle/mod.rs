@@ -3,11 +3,13 @@
 //! behind a `Backend` trait so callers can swap engines.
 
 pub mod duration_predictor;
+pub mod supertonic;
 pub mod text_encoder;
 pub mod vector_estimator;
 pub mod vocoder;
 
 pub use duration_predictor::CandleDurationPredictor;
+pub use supertonic::CandleSupertonic;
 pub use text_encoder::CandleTextEncoder;
 pub use vector_estimator::CandleVectorEstimator;
 pub use vocoder::CandleVocoder;
